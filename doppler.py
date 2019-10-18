@@ -1,8 +1,10 @@
 ####
-## cloud-discover.py
-## Identify cloud compute resources from a list of IP addresses
-## Reads a list of IPs, pulls current compute netblocks, and returns IP addresses
+## doppler.py
+## Identify cloud resources from a list of IP addresses
+## Reads a list of IPs, pulls current cloud provider netblocks, and returns IP addresses
 ## that belong to AWS, Azure, and GCP netblocks.
+##
+## outputs a CSV file, or prints to terminal if no output file is passed.
 ####
 import requests
 import json
@@ -11,21 +13,21 @@ import socket
 import ipaddress
 import re
 import argparse
-# Specify directory for netblocks (Default is ./ip-ranges)
-# Specify input file [required]
-# Specify specific cloud platform (default is all)
 
-#AWS FORMAT: {'ip_prefix': '52.95.255.0/28', 'region': 'sa-east-1', 'service': 'EC2'}
-#GCP FORMAT: ['35.232.0.0/15', '35.234.0.0/16', ...]
-#AZR FORMAT: {a big mess}
 
 def getArgs():
-	parser = argparse.argumentParser
+	parser = argparse.ArgumentParser()
+	parser.add_argument('-i','--input', help = 'path to input file containing one IP or CIDR subnet per line', required = True)
+	parser.add_argument('-o', '--output', help = 'path to output location for CSV file', required = False)
+	return parser.parse_args()
+
 
 def getRanges(platforms):
-	awsurl = "https://ip-ranges.amazonaws.com/ip-ranges.json"
-	azureurl = "https://www.microsoft.com/en-us/download/confirmation.aspx?id=56519"
-	google_record = "_cloud-netblocks.googleusercontent.com."
+	awsurl = 'https://ip-ranges.amazonaws.com/ip-ranges.json'
+	azureurl = 'https://www.microsoft.com/en-us/download/confirmation.aspx?id=56519'
+	
+	#TXT record to query for google
+	google_record = '_cloud-netblocks.googleusercontent.com.'
 	master_list = dict()
 
 	#pull json data from Amazon
@@ -50,10 +52,6 @@ def getRanges(platforms):
 	if 'gcp' in platforms:
 			gcp_subnets = []
 			resolver = dns.resolver.Resolver()
-
-			#resolver.nameservers = [socket.gethostbyname('ns1.google.com')]
-
-			#Query google's nameservers, store the response in rdata.
 			rdata = resolver.query(google_record, 'TXT')
 			dnsParse(rdata,resolver,gcp_subnets)
 			master_list['gcp'] = gcp_subnets
@@ -62,9 +60,6 @@ def getRanges(platforms):
 
 
 def dnsParse(rdata,resolver,gcp_subnets):
-	#split data into a list of items. If the item contains 'include:', cut out 'include:' perform 
-	#a DNS lookup and re-run the function. If the item contains "ip4:", cut ip4 and append the range
-	#to the list of netblocks.
 	for answer in rdata:
 			records = str(answer).split(' ')
 	for line in records:
@@ -90,10 +85,11 @@ def readInput(filename):
 	return(user_list)
 
 
-
 def compareNets(user_list,cloud_ranges):
 	matches = {'aws':{}, 'azure':{}, 'gcp':[]}
+
 	for ip in user_list:
+		found = 0
 		#compare AWS
 		for row in cloud_ranges['aws']:
 			if ip in ipaddress.ip_network(row['ip_prefix']):
@@ -101,38 +97,67 @@ def compareNets(user_list,cloud_ranges):
 					matches['aws'][ip] = {'region':[],'service':[]}
 				matches['aws'][ip]['region'].append(row['region'])
 				matches['aws'][ip]['service'].append(row['service'])
+				found += 1
 
 		#Compare GCP
-		for row in cloud_ranges['gcp']:
-			if ip in ipaddress.ip_network(row):
-				if ip not in matches['gcp']:
-					matches['gcp'].append(ip)
+		if found == 0:
+			for row in cloud_ranges['gcp']:
+				if ip in ipaddress.ip_network(row):
+					found += 1
+					if ip not in matches['gcp']:
+						matches['gcp'].append(ip)
 
 		#Compare Azure
-		for row in cloud_ranges['azure']:
-			for subnet in row['properties']['addressPrefixes']:
-				if ip in ipaddress.ip_network(subnet):
-					if ip not in matches['azure']:
-						matches['azure'][ip] = {'region':[],'service':[]}
-					matches['azure'][ip]['region'].append(row['properties']['region'])
-					matches['azure'][ip]['service'].append(row['name'])
+		if found == 0:
+			for row in cloud_ranges['azure']:
+				for subnet in row['properties']['addressPrefixes']:
+					if ip in ipaddress.ip_network(subnet):
+						if ip not in matches['azure']:
+							matches['azure'][ip] = {'region':[],'service':[]}
+						matches['azure'][ip]['region'].append(row['properties']['region'])
+						matches['azure'][ip]['service'].append(row['name'])
 	return matches
 
 
-filename = "testfile"
+def writeOutput(matches,outputfile):
+	text = ['platform,ip_address,region,service']
+	for item in matches['aws']:
+		platform = 'aws'
+		ip = item
+		for x in range(0,len(matches[platform][item]['region'])):
+			region = matches[platform][item]['region'][x]
+			service = matches[platform][item]['service'][x]
+			text.append('%s,%s,%s,%s' % (platform, ip, region, service))
+
+	for item in matches['azure']:
+		platform = 'azure'
+		ip = item
+		for x in range(0,len(matches[platform][item]['region'])):
+			region = matches[platform][item]['region'][x]
+			service = matches[platform][item]['service'][x]
+			text.append('%s,%s,%s,%s' % (platform, ip, region, service))
+
+	for item in matches['gcp']:
+		platform = 'gcp'
+		ip = item
+		region = ''
+		service = 'compute'
+		text.append('%s,%s,%s,%s' % (platform, ip, region, service))
+
+	if outputfile != None:
+		w = open(outputfile,'w')
+		w.write('\n'.join(text))
+		w.close()
+	else:
+		for line in text:
+			print(text)
+
+
+args = getArgs()
+filename = args.input
+outputfile = args.output
 platforms = ['aws','azure','gcp']
 cloud_ranges = getRanges(platforms)
 user_list = readInput(filename)
-
 matches = compareNets(user_list,cloud_ranges)
-
-print("AWS Matches:")
-print("======================================================")
-print(matches['aws'])
-print("======================================================")
-print("GCP Matches:")
-print("======================================================")
-print(matches['gcp'])
-print("Azure Matches:")
-print("======================================================")
-print(matches['azure'])
+writeOutput(matches,outputfile)
