@@ -10,6 +10,7 @@ import dns.resolver
 import socket
 import ipaddress
 import re
+import argparse
 # Specify directory for netblocks (Default is ./ip-ranges)
 # Specify input file [required]
 # Specify specific cloud platform (default is all)
@@ -17,6 +18,9 @@ import re
 #AWS FORMAT: {'ip_prefix': '52.95.255.0/28', 'region': 'sa-east-1', 'service': 'EC2'}
 #GCP FORMAT: ['35.232.0.0/15', '35.234.0.0/16', ...]
 #AZR FORMAT: {a big mess}
+
+def getArgs():
+	parser = argparse.argumentParser
 
 def getRanges(platforms):
 	awsurl = "https://ip-ranges.amazonaws.com/ip-ranges.json"
@@ -89,8 +93,8 @@ def readInput(filename):
 
 def compareNets(user_list,cloud_ranges):
 	matches = {'aws':{}, 'azure':{}, 'gcp':[]}
-	#compare AWS
 	for ip in user_list:
+		#compare AWS
 		for row in cloud_ranges['aws']:
 			if ip in ipaddress.ip_network(row['ip_prefix']):
 				if ip not in matches['aws']:	
@@ -98,16 +102,21 @@ def compareNets(user_list,cloud_ranges):
 				matches['aws'][ip]['region'].append(row['region'])
 				matches['aws'][ip]['service'].append(row['service'])
 
+		#Compare GCP
 		for row in cloud_ranges['gcp']:
 			if ip in ipaddress.ip_network(row):
 				if ip not in matches['gcp']:
 					matches['gcp'].append(ip)
 
-
+		#Compare Azure
+		for row in cloud_ranges['azure']:
+			for subnet in row['properties']['addressPrefixes']:
+				if ip in ipaddress.ip_network(subnet):
+					if ip not in matches['azure']:
+						matches['azure'][ip] = {'region':[],'service':[]}
+					matches['azure'][ip]['region'].append(row['properties']['region'])
+					matches['azure'][ip]['service'].append(row['name'])
 	return matches
-
-
-
 
 
 filename = "testfile"
@@ -124,3 +133,6 @@ print("======================================================")
 print("GCP Matches:")
 print("======================================================")
 print(matches['gcp'])
+print("Azure Matches:")
+print("======================================================")
+print(matches['azure'])
